@@ -1,9 +1,10 @@
 import discord
 from discord.ext import tasks
 
-from config import TOKEN, CHANNEL_ID, CHECK_INTERVAL
+from config import TOKEN, CHANNEL_ID, CHECK_INTERVAL, TEST_MODE
 from rss_reader import fetch_posts
 from storage import load_seen_posts, save_seen_posts, is_first_run
+from discord_sender import send_post
 
 
 def load_accounts():
@@ -49,6 +50,10 @@ async def check_posts():
     for account in accounts:
         try:
             posts = fetch_posts(account)
+            if TEST_MODE and posts:
+                await send_post(channel, posts[0])
+                print(f"TEST_MODE: {account['name']} の最新1件を送信しました")
+                continue
 
             if first_run:
                 for post in posts:
@@ -64,13 +69,7 @@ async def check_posts():
                     new_posts.append(post)
 
             for post in reversed(new_posts):
-                message = (
-                    f"📢 **{post['account_name']} に新しいポスト！**\n"
-                    f"**{post['title']}**\n"
-                    f"{post['link']}"
-                )
-
-                await channel.send(message)
+                await send_post(channel, post)
 
                 seen_posts.add(post["id"])
 

@@ -15,24 +15,64 @@ def clean_text(text):
 
 
 def extract_image(entry):
-    # RSS.appで画像が media_content に入る場合
-    if "media_content" in entry:
-        for media in entry.media_content:
-            if "url" in media:
-                return media["url"]
+    """
+    RSS内から最初の画像URLを探して返す。
+    RSSサービスによって画像の保存場所が違うため、
+    複数の形式を順番に確認する。
+    """
 
-    # enclosure に画像が入る場合
-    if "enclosures" in entry:
-        for enclosure in entry.enclosures:
-            if enclosure.get("type", "").startswith("image/"):
-                return enclosure.get("href")
+    # 1. media:content
+    media_content = entry.get("media_content", [])
 
-    # summary内のimgタグから拾う場合
-    summary = entry.get("summary", "")
-    match = re.search(r'<img[^>]+src="([^">]+)"', summary)
+    for media in media_content:
+        url = media.get("url")
 
-    if match:
-        return html.unescape(match.group(1))
+        if url:
+            return html.unescape(url)
+
+    # 2. media:thumbnail
+    media_thumbnail = entry.get("media_thumbnail", [])
+
+    for thumbnail in media_thumbnail:
+        url = thumbnail.get("url")
+
+        if url:
+            return html.unescape(url)
+
+    # 3. enclosure
+    enclosures = entry.get("enclosures", [])
+
+    for enclosure in enclosures:
+        enclosure_type = enclosure.get("type", "")
+        url = enclosure.get("href") or enclosure.get("url")
+
+        if url and enclosure_type.startswith("image/"):
+            return html.unescape(url)
+
+    # 4. summary / description内のimgタグ
+    html_sources = [
+        entry.get("summary", ""),
+        entry.get("description", "")
+    ]
+
+    # 5. content内のHTMLも確認
+    for content in entry.get("content", []):
+        if isinstance(content, dict):
+            html_sources.append(content.get("value", ""))
+
+    for source in html_sources:
+        if not source:
+            continue
+
+        # src="..." と src='...' の両方に対応
+        match = re.search(
+            r"""<img[^>]+src=["']([^"']+)["']""",
+            source,
+            re.IGNORECASE
+        )
+
+        if match:
+            return html.unescape(match.group(1))
 
     return None
 

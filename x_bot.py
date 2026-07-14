@@ -44,8 +44,16 @@ def load_accounts():
     対応形式:
 
     表示名|twitter|ユーザー名
+    表示名|twitter|ユーザー名|スレッドID
+
     表示名|rss|RSSのURL
-    表示名|RSSのURL（旧形式）
+    表示名|rss|RSSのURL|スレッドID
+
+    表示名|atom|AtomのURL
+    表示名|atom|AtomのURL|スレッドID
+
+    表示名|RSSのURL
+    表示名|RSSのURL|スレッドID
     """
 
     accounts = []
@@ -76,15 +84,19 @@ def load_accounts():
             ]
 
             try:
+                thread_id = None
+
                 # 新形式:
                 # 表示名|twitter|ユーザー名
+                # 表示名|twitter|ユーザー名|スレッドID
                 # 表示名|rss|URL
-                if len(parts) == 3:
+                # 表示名|rss|URL|スレッドID
+                if len(parts) in (3, 4):
                     name = parts[0]
                     source_type = parts[1].lower()
                     source_value = parts[2]
 
-                    if source_type == "twitter":
+                    if source_type in ("twitter", "x"):
                         rss_url = create_rsshub_twitter_url(
                             source_value
                         )
@@ -99,6 +111,19 @@ def load_accounts():
                             flush=True
                         )
                         continue
+
+                    # 4列目にスレッドIDがある場合
+                    if len(parts) == 4 and parts[3]:
+                        try:
+                            thread_id = int(parts[3])
+
+                        except ValueError:
+                            print(
+                                f"accounts.txtの{line_number}行目: "
+                                "スレッドIDは数字だけで入力してください。",
+                                flush=True
+                            )
+                            continue
 
                 # 旧形式:
                 # 表示名|URL
@@ -132,7 +157,8 @@ def load_accounts():
 
                 accounts.append({
                     "name": name,
-                    "rss_url": rss_url
+                    "rss_url": rss_url,
+                    "thread_id": thread_id
                 })
 
             except Exception as error:
@@ -183,66 +209,90 @@ async def check_posts():
     for account in accounts:
         try:
             posts = fetch_posts(account)
-
-            if TEST_MODE and posts:
-                await send_post(
-                    channel,
-                    posts[0]
-                )
-
-                print(
-                    "TEST_MODE: "
-                    f"{account['name']} の最新1件を"
-                    "送信しました。",
-                    flush=True
-                )
-                continue
-
-            if first_run:
-                for post in posts:
-                    seen_posts.add(post["id"])
-
-                print(
-                    f"{account['name']} の既存ポストを"
-                    "記録しました。",
-                    flush=True
-                )
-                continue
-
-            new_posts = []
-
-            for post in posts:
-                if post["id"] not in seen_posts:
-                    new_posts.append(post)
-
-            # 古い投稿から順番に送信する
-            for post in reversed(new_posts):
-                await send_post(
-                    channel,
-                    post
-                )
-
-                seen_posts.add(post["id"])
-
-            if new_posts:
-                print(
-                    f"{account['name']}："
-                    f"{len(new_posts)}件通知しました。",
-                    flush=True
-                )
-
-            else:
-                print(
-                    f"{account['name']}：新着なし",
-                    flush=True
-                )
-
         except Exception as error:
             print(
                 f"{account['name']} の取得中にエラー: "
                 f"{type(error).__name__}: {error}",
                 flush=True
             )
+            continue
+
+        # 通常は指定チャンネルへ送信
+        send_target = channel
+
+        # accounts.txtにスレッドIDがあれば、
+        # そのスレッドを送信先にする
+        thread_id = account.get("thread_id")
+
+        if thread_id:
+            send_target = client.get_channel(thread_id)
+
+            if send_target is None:
+                try:
+                    send_target = await client.fetch_channel(
+                        thread_id
+                    )
+
+                except Exception as error:
+                    print(
+                        f"{account['name']} の"
+                        "スレッド取得に失敗しました: "
+                        f"{type(error).__name__}: {error}",
+                        flush=True
+                    )
+                    continue
+
+        if TEST_MODE and posts:
+            await send_post(
+                send_target,
+                posts[0]
+            )
+
+            print(
+                f"TEST_MODE: {account['name']} の"
+                "最新1件を送信しました",
+                flush=True
+            )
+            continue
+
+        if first_run:
+            for post in posts:
+                seen_posts.add(post["id"])
+
+            print(
+                f"{account['name']} の既存ポストを"
+                "記録しました",
+                flush=True
+            )
+            continue
+
+        new_posts = []
+
+        for post in posts:
+            if post["id"] not in seen_posts:
+                new_posts.append(post)
+
+        for post in reversed(new_posts):
+            await send_post(
+                send_target,
+                post
+            )
+
+            seen_posts.add(post["id"])
+
+        if new_posts:
+            print(
+                f"{account['name']}："
+                f"{len(new_posts)}件通知しました",
+                flush=True
+            )
+
+        else:
+            print(
+                f"{account['name']}：新着なし",
+                flush=True
+            )
+
 
     save_seen_posts(seen_posts)
     first_run = False
